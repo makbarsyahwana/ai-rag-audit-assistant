@@ -1,0 +1,163 @@
+# Production overlay — use with: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# Enables horizontal scaling, resource limits, and production configs.
+
+services:
+  # ---------------------------------------------------------------
+  # audit-assistant-api — horizontally scaled behind nginx
+  # ---------------------------------------------------------------
+  audit-assistant-api:
+    image: audit-assistant-api:latest
+    build:
+      context: ./audit-assistant-api
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: production
+      LOG_FORMAT: json
+      DATABASE_URL: postgresql://audit_user:audit_pass@postgres:5432/audit_api
+      REDIS_URL: redis://redis:6379
+      RAG_ENGINE_URL: http://audit-rag-engine:8001
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------
+  # audit-rag-engine — horizontally scaled behind nginx
+  # ---------------------------------------------------------------
+  audit-rag-engine:
+    image: audit-rag-engine:latest
+    build:
+      context: ./audit-rag-engine
+      dockerfile: Dockerfile
+    environment:
+      LOG_FORMAT: json
+      LOG_LEVEL: INFO
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ---------------------------------------------------------------
+  # nginx — load balancer / reverse proxy
+  # ---------------------------------------------------------------
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: audit-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - audit-assistant-api
+      - audit-rag-engine
+
+  # ---------------------------------------------------------------
+  # Resource limits for infrastructure services
+  # ---------------------------------------------------------------
+  postgres:
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+
+  redis:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+
+  mongodb:
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 2G
+
+  neo4j:
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4G
+
+  rabbitmq:
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+
+  # ---------------------------------------------------------------
+  # ingestion-worker — async pipeline consumer (scalable)
+  # ---------------------------------------------------------------
+  ingestion-worker:
+    image: audit-rag-engine:latest
+    build:
+      context: ./audit-rag-engine
+      dockerfile: Dockerfile
+    command: ["python", "-m", "src.worker"]
+    environment:
+      LOG_FORMAT: json
+      LOG_LEVEL: INFO
+      RABBITMQ_URL: amqp://audit_user:audit_pass@rabbitmq:5672/audit
+      NEO4J_URI: bolt://neo4j:7687
+      MONGODB_URI: mongodb://audit_user:audit_pass@mongodb:27017/audit_rag?authSource=admin
+      S3_ENDPOINT: http://minio:9000
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
