@@ -1,0 +1,7 @@
+# Submodules are tracked separately, ignore their internals
+/audit-rag-engine/
+/audit-assistant-api/
+/audit-assistant-ui/
+
+# OS
+.DS_Store
