@@ -1,11 +1,14 @@
 [submodule "audit-rag-engine"]
-	path = audit-rag-engine
-	url = git@github.com:makbarsyahwana/audit-rag-engine.git
+    path = audit-rag-engine
+    url = git@github.com:makbarsyahwana/audit-rag-engine.git
+    branch = main
 
 [submodule "audit-assistant-api"]
-	path = audit-assistant-api
-	url = git@github.com:makbarsyahwana/audit-assistant-api.git
+    path = audit-assistant-api
+    url = git@github.com:makbarsyahwana/audit-assistant-api.git
+    branch = main
 
 [submodule "audit-assistant-ui"]
-	path = audit-assistant-ui
-	url = git@github.com:makbarsyahwana/audit-assistant-ui.git
+    path = audit-assistant-ui
+    url = git@github.com:makbarsyahwana/audit-assistant-ui.git
+    branch = main
