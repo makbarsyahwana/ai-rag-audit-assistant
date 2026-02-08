@@ -113,4 +113,4 @@ Each submodule is a fully independent repo — branch, commit, push, and PR as n
 
 ## License
 
-[MIT](../LICENSE)
+[MIT](LICENSE)
