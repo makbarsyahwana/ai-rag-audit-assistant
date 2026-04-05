@@ -1,0 +1,9 @@
+apiVersion: v2
+name: audit-rag-engine
+description: RAG Engine for AI RAG Audit Assistant (Python FastAPI + Docling + Neo4j)
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+maintainers:
+  - name: Muhammad Akbar Syahwana
+    email: makbarsyahwana@gmail.com

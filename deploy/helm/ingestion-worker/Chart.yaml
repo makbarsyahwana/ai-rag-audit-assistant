@@ -1,0 +1,9 @@
+apiVersion: v2
+name: ingestion-worker
+description: Async ingestion worker for AI RAG Audit Assistant (Python + RabbitMQ)
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+maintainers:
+  - name: Muhammad Akbar Syahwana
+    email: makbarsyahwana@gmail.com

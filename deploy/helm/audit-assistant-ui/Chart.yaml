@@ -1,0 +1,9 @@
+apiVersion: v2
+name: audit-assistant-ui
+description: Frontend UI for AI RAG Audit Assistant (Next.js)
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+maintainers:
+  - name: Muhammad Akbar Syahwana
+    email: makbarsyahwana@gmail.com

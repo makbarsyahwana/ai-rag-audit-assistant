@@ -1,0 +1,174 @@
+# ============================================================
+# GKE Autopilot — Production Helm value overrides
+# Usage:
+#   helm upgrade --install audit-api ./deploy/helm/audit-assistant-api \
+#     -f ./deploy/helm/overrides/gke-production.yaml -n audit-prod
+# ============================================================
+
+# ---------- audit-assistant-api ----------
+audit-assistant-api:
+  replicaCount: 3
+  image:
+    repository: us-central1-docker.pkg.dev/audit-ai-prod/audit-repo/audit-assistant-api
+    tag: "${IMAGE_TAG}"
+  service:
+    type: ClusterIP
+    port: 8000
+  ingress:
+    enabled: true
+    className: gce
+    annotations:
+      kubernetes.io/ingress.global-static-ip-name: audit-api-ip
+      networking.gke.io/managed-certificates: audit-api-cert
+      kubernetes.io/ingress.class: gce
+    hosts:
+      - host: api.audit.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: audit-api-tls
+        hosts:
+          - api.audit.example.com
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 12
+    targetCPUUtilizationPercentage: 65
+    targetMemoryUtilizationPercentage: 75
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2
+  serviceAccount:
+    create: true
+    name: audit-api-sa
+    annotations:
+      iam.gke.io/gcp-service-account: audit-api@audit-ai-prod.iam.gserviceaccount.com
+  env:
+    NODE_ENV: production
+    RAG_ENGINE_URL: http://audit-rag-engine:8100
+    LOG_LEVEL: info
+    LOG_FORMAT: json
+
+# ---------- audit-rag-engine ----------
+audit-rag-engine:
+  replicaCount: 3
+  image:
+    repository: us-central1-docker.pkg.dev/audit-ai-prod/audit-repo/audit-rag-engine
+    tag: "${IMAGE_TAG}"
+  service:
+    type: ClusterIP
+    port: 8100
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 60
+    targetMemoryUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2
+  serviceAccount:
+    create: true
+    name: audit-rag-sa
+    annotations:
+      iam.gke.io/gcp-service-account: audit-rag@audit-ai-prod.iam.gserviceaccount.com
+  env:
+    LOG_LEVEL: INFO
+    LOG_FORMAT: json
+    ENTITY_EXTRACTION_ENABLED: "true"
+
+# ---------- audit-assistant-ui ----------
+audit-assistant-ui:
+  replicaCount: 2
+  image:
+    repository: us-central1-docker.pkg.dev/audit-ai-prod/audit-repo/audit-assistant-ui
+    tag: "${IMAGE_TAG}"
+  service:
+    type: ClusterIP
+    port: 3000
+  ingress:
+    enabled: true
+    className: gce
+    annotations:
+      kubernetes.io/ingress.global-static-ip-name: audit-ui-ip
+      networking.gke.io/managed-certificates: audit-ui-cert
+      kubernetes.io/ingress.class: gce
+    hosts:
+      - host: audit.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: audit-ui-tls
+        hosts:
+          - audit.example.com
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  serviceAccount:
+    create: true
+    name: audit-ui-sa
+    annotations:
+      iam.gke.io/gcp-service-account: audit-ui@audit-ai-prod.iam.gserviceaccount.com
+  env:
+    NODE_ENV: production
+    NEXT_PUBLIC_API_URL: https://api.audit.example.com
+
+# ---------- ingestion-worker ----------
+ingestion-worker:
+  replicaCount: 2
+  image:
+    repository: us-central1-docker.pkg.dev/audit-ai-prod/audit-repo/ingestion-worker
+    tag: "${IMAGE_TAG}"
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 60
+    targetMemoryUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  serviceAccount:
+    create: true
+    name: audit-worker-sa
+    annotations:
+      iam.gke.io/gcp-service-account: audit-worker@audit-ai-prod.iam.gserviceaccount.com
+  env:
+    LOG_LEVEL: INFO
+    LOG_FORMAT: json

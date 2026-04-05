@@ -1,0 +1,97 @@
+# Default values for audit-assistant-ui
+
+replicaCount: 2
+
+image:
+  repository: audit-assistant-ui
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 3000
+
+ingress:
+  enabled: true
+  className: ""
+  annotations: {}
+  hosts:
+    - host: audit.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+env:
+  NODE_ENV: production
+  NEXT_PUBLIC_API_URL: http://audit-api:8000
+
+secretRefs:
+  - name: NEXTAUTH_SECRET
+    secretName: audit-ui-secrets
+    secretKey: nextauth-secret
+
+probes:
+  startup:
+    path: /
+    port: 3000
+    initialDelaySeconds: 5
+    periodSeconds: 3
+    failureThreshold: 10
+  liveness:
+    path: /
+    port: 3000
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    path: /
+    port: 3000
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+podAntiAffinity:
+  enabled: true
+  type: soft
+
+serviceAccount:
+  create: true
+  name: audit-ui-sa
+  annotations: {}
+
+networkPolicy:
+  enabled: true
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: nginx-ingress
+      ports:
+        - port: 3000
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: audit-assistant-api
+      ports:
+        - port: 8000

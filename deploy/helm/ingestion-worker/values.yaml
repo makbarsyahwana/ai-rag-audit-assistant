@@ -1,0 +1,70 @@
+# Default values for ingestion-worker
+
+replicaCount: 2
+
+image:
+  repository: ingestion-worker
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# Worker has no HTTP service — it consumes from RabbitMQ queues
+service:
+  enabled: false
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: "2"
+    memory: 4Gi
+
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 60
+  targetMemoryUtilizationPercentage: 75
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+env:
+  LOG_LEVEL: INFO
+  LOG_FORMAT: json
+
+secretRefs:
+  - name: RABBITMQ_URL
+    secretName: audit-rag-secrets
+    secretKey: rabbitmq-url
+  - name: NEO4J_URI
+    secretName: audit-rag-secrets
+    secretKey: neo4j-uri
+  - name: MONGODB_URI
+    secretName: audit-rag-secrets
+    secretKey: mongodb-uri
+  - name: S3_ENDPOINT
+    secretName: audit-rag-secrets
+    secretKey: s3-endpoint
+  - name: S3_ACCESS_KEY
+    secretName: audit-rag-secrets
+    secretKey: s3-access-key
+  - name: S3_SECRET_KEY
+    secretName: audit-rag-secrets
+    secretKey: s3-secret-key
+  - name: OPENAI_API_KEY
+    secretName: audit-shared-secrets
+    secretKey: openai-api-key
+  - name: REDIS_URL
+    secretName: audit-rag-secrets
+    secretKey: redis-url
+
+podAntiAffinity:
+  enabled: true
+  type: soft
+
+serviceAccount:
+  create: true
+  name: audit-worker-sa
+  annotations: {}

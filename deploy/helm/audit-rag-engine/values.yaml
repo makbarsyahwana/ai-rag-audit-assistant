@@ -1,0 +1,117 @@
+# Default values for audit-rag-engine
+
+replicaCount: 2
+
+image:
+  repository: audit-rag-engine
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8001
+
+ingress:
+  enabled: true
+  className: ""
+  annotations: {}
+  hosts:
+    - host: rag.audit.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: "2"
+    memory: 4Gi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 8
+  targetCPUUtilizationPercentage: 60
+  targetMemoryUtilizationPercentage: 75
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+env:
+  LOG_LEVEL: INFO
+  LOG_FORMAT: json
+
+secretRefs:
+  - name: NEO4J_URI
+    secretName: audit-rag-secrets
+    secretKey: neo4j-uri
+  - name: MONGODB_URI
+    secretName: audit-rag-secrets
+    secretKey: mongodb-uri
+  - name: S3_ENDPOINT
+    secretName: audit-rag-secrets
+    secretKey: s3-endpoint
+  - name: S3_ACCESS_KEY
+    secretName: audit-rag-secrets
+    secretKey: s3-access-key
+  - name: S3_SECRET_KEY
+    secretName: audit-rag-secrets
+    secretKey: s3-secret-key
+  - name: OPENAI_API_KEY
+    secretName: audit-shared-secrets
+    secretKey: openai-api-key
+  - name: REDIS_URL
+    secretName: audit-rag-secrets
+    secretKey: redis-url
+  - name: RABBITMQ_URL
+    secretName: audit-rag-secrets
+    secretKey: rabbitmq-url
+  - name: SERVICE_AUTH_TOKEN
+    secretName: audit-rag-secrets
+    secretKey: service-auth-token
+
+probes:
+  startup:
+    path: /health
+    port: 8001
+    initialDelaySeconds: 15
+    periodSeconds: 5
+    failureThreshold: 15
+  liveness:
+    path: /health
+    port: 8001
+    periodSeconds: 30
+    timeoutSeconds: 10
+    failureThreshold: 3
+  readiness:
+    path: /health
+    port: 8001
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+podAntiAffinity:
+  enabled: true
+  type: soft
+
+serviceAccount:
+  create: true
+  name: audit-rag-sa
+  annotations: {}
+
+networkPolicy:
+  enabled: true
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: audit-assistant-api
+        - podSelector:
+            matchLabels:
+              app: nginx-ingress
+      ports:
+        - port: 8001
