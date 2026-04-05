@@ -1,0 +1,533 @@
+# =============================================================================
+# Concourse CI/CD Pipeline — Google Cloud Platform
+# =============================================================================
+# Pipeline: build → test → push to Artifact Registry → deploy staging (Cloud Run)
+#           → smoke tests → manual gate → deploy production (GKE via Helm)
+#
+# Set pipeline:
+#   fly -t main set-pipeline -p audit-gcp \
+#     -c deploy/gcp/concourse/pipeline.yml \
+#     -l deploy/gcp/concourse/params-staging.yml
+# =============================================================================
+
+resource_types:
+  - name: gcs-resource
+    type: registry-image
+    source:
+      repository: frodenas/gcs-resource
+
+resources:
+  # ---- Git repositories ----
+  - name: repo-api
+    type: git
+    icon: github
+    source:
+      uri: ((git-repo-api-uri))
+      branch: main
+      private_key: ((git-private-key))
+
+  - name: repo-rag-engine
+    type: git
+    icon: github
+    source:
+      uri: ((git-repo-rag-engine-uri))
+      branch: main
+      private_key: ((git-private-key))
+
+  - name: repo-ui
+    type: git
+    icon: github
+    source:
+      uri: ((git-repo-ui-uri))
+      branch: main
+      private_key: ((git-private-key))
+
+  - name: repo-infra
+    type: git
+    icon: github
+    source:
+      uri: ((git-repo-infra-uri))
+      branch: main
+      private_key: ((git-private-key))
+
+  # ---- Container images (Artifact Registry) ----
+  - name: image-api
+    type: registry-image
+    icon: docker
+    source:
+      repository: ((gcp-region))-docker.pkg.dev/((gcp-project-id))/((artifact-repo))/audit-assistant-api
+      username: _json_key
+      password: ((gcp-service-account-key))
+
+  - name: image-rag-engine
+    type: registry-image
+    icon: docker
+    source:
+      repository: ((gcp-region))-docker.pkg.dev/((gcp-project-id))/((artifact-repo))/audit-rag-engine
+      username: _json_key
+      password: ((gcp-service-account-key))
+
+  - name: image-ui
+    type: registry-image
+    icon: docker
+    source:
+      repository: ((gcp-region))-docker.pkg.dev/((gcp-project-id))/((artifact-repo))/audit-assistant-ui
+      username: _json_key
+      password: ((gcp-service-account-key))
+
+  - name: image-worker
+    type: registry-image
+    icon: docker
+    source:
+      repository: ((gcp-region))-docker.pkg.dev/((gcp-project-id))/((artifact-repo))/ingestion-worker
+      username: _json_key
+      password: ((gcp-service-account-key))
+
+# =============================================================================
+# Jobs
+# =============================================================================
+jobs:
+  # ---------- 1. Test: audit-assistant-api ----------
+  - name: test-api
+    plan:
+      - get: repo-api
+        trigger: true
+      - task: lint-and-test
+        config:
+          platform: linux
+          image_resource:
+            type: registry-image
+            source: { repository: node, tag: "20-alpine" }
+          inputs:
+            - name: repo-api
+          run:
+            path: sh
+            args:
+              - -exc
+              - |
+                cd repo-api
+                npm ci
+                npx prisma generate
+                npm run lint
+                npm run test
+
+  # ---------- 2. Test: audit-rag-engine ----------
+  - name: test-rag-engine
+    plan:
+      - get: repo-rag-engine
+        trigger: true
+      - task: lint-and-test
+        config:
+          platform: linux
+          image_resource:
+            type: registry-image
+            source: { repository: python, tag: "3.11-slim" }
+          inputs:
+            - name: repo-rag-engine
+          run:
+            path: sh
+            args:
+              - -exc
+              - |
+                cd repo-rag-engine
+                pip install -e ".[dev]"
+                ruff check src/ tests/
+                pytest tests/ -v
+
+  # ---------- 3. Test: audit-assistant-ui ----------
+  - name: test-ui
+    plan:
+      - get: repo-ui
+        trigger: true
+      - task: lint-and-build
+        config:
+          platform: linux
+          image_resource:
+            type: registry-image
+            source: { repository: node, tag: "20-alpine" }
+          inputs:
+            - name: repo-ui
+          run:
+            path: sh
+            args:
+              - -exc
+              - |
+                cd repo-ui
+                npm ci
+                npm run lint
+                npm run build
+
+  # ---------- 4. Build & push images ----------
+  - name: build-images
+    plan:
+      - in_parallel:
+          - get: repo-api
+            passed: [test-api]
+            trigger: true
+          - get: repo-rag-engine
+            passed: [test-rag-engine]
+            trigger: true
+          - get: repo-ui
+            passed: [test-ui]
+            trigger: true
+          - get: repo-infra
+
+      - in_parallel:
+          - task: build-api
+            privileged: true
+            config:
+              platform: linux
+              image_resource:
+                type: registry-image
+                source: { repository: concourse/oci-build-task }
+              inputs:
+                - name: repo-api
+                - name: repo-infra
+              outputs:
+                - name: image-api-output
+              params:
+                CONTEXT: repo-api
+                DOCKERFILE: repo-infra/deploy/dockerfiles/api.Dockerfile
+              run:
+                path: build
+            output_mapping:
+              image: image-api-output
+
+          - task: build-rag-engine
+            privileged: true
+            config:
+              platform: linux
+              image_resource:
+                type: registry-image
+                source: { repository: concourse/oci-build-task }
+              inputs:
+                - name: repo-rag-engine
+                - name: repo-infra
+              outputs:
+                - name: image-rag-engine-output
+              params:
+                CONTEXT: repo-rag-engine
+                DOCKERFILE: repo-infra/deploy/dockerfiles/rag-engine.Dockerfile
+              run:
+                path: build
+            output_mapping:
+              image: image-rag-engine-output
+
+          - task: build-ui
+            privileged: true
+            config:
+              platform: linux
+              image_resource:
+                type: registry-image
+                source: { repository: concourse/oci-build-task }
+              inputs:
+                - name: repo-ui
+                - name: repo-infra
+              outputs:
+                - name: image-ui-output
+              params:
+                CONTEXT: repo-ui
+                DOCKERFILE: repo-infra/deploy/dockerfiles/ui.Dockerfile
+              run:
+                path: build
+            output_mapping:
+              image: image-ui-output
+
+          - task: build-worker
+            privileged: true
+            config:
+              platform: linux
+              image_resource:
+                type: registry-image
+                source: { repository: concourse/oci-build-task }
+              inputs:
+                - name: repo-rag-engine
+                - name: repo-infra
+              outputs:
+                - name: image-worker-output
+              params:
+                CONTEXT: repo-rag-engine
+                DOCKERFILE: repo-infra/deploy/dockerfiles/worker.Dockerfile
+              run:
+                path: build
+            output_mapping:
+              image: image-worker-output
+
+      - in_parallel:
+          - put: image-api
+            params: { image: image-api-output/image.tar }
+          - put: image-rag-engine
+            params: { image: image-rag-engine-output/image.tar }
+          - put: image-ui
+            params: { image: image-ui-output/image.tar }
+          - put: image-worker
+            params: { image: image-worker-output/image.tar }
+
+  # ---------- 5. Deploy staging (Cloud Run) ----------
+  - name: deploy-staging
+    plan:
+      - in_parallel:
+          - get: image-api
+            passed: [build-images]
+            trigger: true
+          - get: image-rag-engine
+            passed: [build-images]
+            trigger: true
+          - get: image-ui
+            passed: [build-images]
+            trigger: true
+          - get: image-worker
+            passed: [build-images]
+            trigger: true
+          - get: repo-infra
+
+      - task: deploy-to-cloud-run
+        config:
+          platform: linux
+          image_resource:
+            type: registry-image
+            source: { repository: google/cloud-sdk, tag: slim }
+          inputs:
+            - name: repo-infra
+          params:
+            GCP_PROJECT_ID: ((gcp-project-id))
+            GCP_REGION: ((gcp-region))
+            GCP_SERVICE_ACCOUNT_KEY: ((gcp-service-account-key))
+            ARTIFACT_REPO: ((artifact-repo))
+            ENV: staging
+          run:
+            path: sh
+            args:
+              - -exc
+              - |
+                echo "$GCP_SERVICE_ACCOUNT_KEY" > /tmp/key.json
+                gcloud auth activate-service-account --key-file=/tmp/key.json
+                gcloud config set project "$GCP_PROJECT_ID"
+
+                REGISTRY="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REPO}"
+
+                # Deploy API
+                gcloud run deploy audit-api-staging \
+                  --image "${REGISTRY}/audit-assistant-api:latest" \
+                  --region "$GCP_REGION" \
+                  --platform managed \
+                  --port 8000 \
+                  --min-instances 0 --max-instances 5 \
+                  --memory 1Gi --cpu 1 \
+                  --set-env-vars "NODE_ENV=staging,LOG_FORMAT=json" \
+                  --set-secrets "DATABASE_URL=audit-db-url-staging:latest,REDIS_URL=audit-redis-url-staging:latest,JWT_SECRET=audit-jwt-secret-staging:latest" \
+                  --allow-unauthenticated \
+                  --quiet
+
+                # Deploy RAG Engine
+                gcloud run deploy audit-rag-staging \
+                  --image "${REGISTRY}/audit-rag-engine:latest" \
+                  --region "$GCP_REGION" \
+                  --platform managed \
+                  --port 8001 \
+                  --min-instances 0 --max-instances 5 \
+                  --memory 4Gi --cpu 2 \
+                  --set-env-vars "LOG_LEVEL=INFO,LOG_FORMAT=json" \
+                  --set-secrets "NEO4J_URI=audit-neo4j-uri-staging:latest,MONGODB_URI=audit-mongo-uri-staging:latest,OPENAI_API_KEY=audit-openai-key:latest" \
+                  --allow-unauthenticated \
+                  --quiet
+
+                # Deploy UI
+                gcloud run deploy audit-ui-staging \
+                  --image "${REGISTRY}/audit-assistant-ui:latest" \
+                  --region "$GCP_REGION" \
+                  --platform managed \
+                  --port 3000 \
+                  --min-instances 0 --max-instances 3 \
+                  --memory 512Mi --cpu 1 \
+                  --set-env-vars "NODE_ENV=staging" \
+                  --allow-unauthenticated \
+                  --quiet
+
+                # Deploy Worker as Cloud Run Job
+                gcloud run jobs update audit-worker-staging \
+                  --image "${REGISTRY}/ingestion-worker:latest" \
+                  --region "$GCP_REGION" \
+                  --memory 4Gi --cpu 2 \
+                  --task-timeout 3600s \
+                  --set-env-vars "LOG_LEVEL=INFO,LOG_FORMAT=json" \
+                  --set-secrets "RABBITMQ_URL=audit-rabbitmq-url-staging:latest,NEO4J_URI=audit-neo4j-uri-staging:latest,MONGODB_URI=audit-mongo-uri-staging:latest" \
+                  --quiet || \
+                gcloud run jobs create audit-worker-staging \
+                  --image "${REGISTRY}/ingestion-worker:latest" \
+                  --region "$GCP_REGION" \
+                  --memory 4Gi --cpu 2 \
+                  --task-timeout 3600s \
+                  --set-env-vars "LOG_LEVEL=INFO,LOG_FORMAT=json" \
+                  --set-secrets "RABBITMQ_URL=audit-rabbitmq-url-staging:latest,NEO4J_URI=audit-neo4j-uri-staging:latest,MONGODB_URI=audit-mongo-uri-staging:latest" \
+                  --quiet
+
+                rm /tmp/key.json
+
+  # ---------- 6. Smoke tests against staging ----------
+  - name: smoke-test-staging
+    plan:
+      - get: repo-infra
+        passed: [deploy-staging]
+        trigger: true
+      - task: run-smoke-tests
+        config:
+          platform: linux
+          image_resource:
+            type: registry-image
+            source: { repository: curlimages/curl, tag: latest }
+          params:
+            API_URL: ((staging-api-url))
+            RAG_URL: ((staging-rag-url))
+            UI_URL: ((staging-ui-url))
+          run:
+            path: sh
+            args:
+              - -exc
+              - |
+                echo "=== Smoke testing staging ==="
+                # API health
+                curl -sf "${API_URL}/health" | grep -q '"status"'
+                echo "✓ API health OK"
+
+                # RAG engine health
+                curl -sf "${RAG_URL}/health" | grep -q '"status"'
+                echo "✓ RAG engine health OK"
+
+                # UI reachable
+                curl -sf "${UI_URL}" -o /dev/null
+                echo "✓ UI reachable"
+
+                echo "=== All smoke tests passed ==="
+
+  # ---------- 7. Manual gate for production ----------
+  - name: approve-production
+    plan:
+      - get: repo-infra
+        passed: [smoke-test-staging]
+      - task: wait-for-approval
+        config:
+          platform: linux
+          image_resource:
+            type: registry-image
+            source: { repository: alpine, tag: "3.19" }
+          run:
+            path: echo
+            args: ["Production deployment approved."]
+
+  # ---------- 8. Deploy production (GKE via Helm) ----------
+  - name: deploy-production
+    plan:
+      - in_parallel:
+          - get: repo-infra
+            passed: [approve-production]
+            trigger: true
+
+      - task: helm-deploy-to-gke
+        config:
+          platform: linux
+          image_resource:
+            type: registry-image
+            source: { repository: alpine/helm, tag: "3.14.0" }
+          inputs:
+            - name: repo-infra
+          params:
+            GCP_PROJECT_ID: ((gcp-project-id))
+            GCP_REGION: ((gcp-region))
+            GKE_CLUSTER: ((gke-cluster-name))
+            GCP_SERVICE_ACCOUNT_KEY: ((gcp-service-account-key))
+            ARTIFACT_REPO: ((artifact-repo))
+            NAMESPACE: audit-production
+          run:
+            path: sh
+            args:
+              - -exc
+              - |
+                # Install gcloud + gke-gcloud-auth-plugin
+                apk add --no-cache curl bash
+                curl -sSL https://sdk.cloud.google.com | bash -s -- --disable-prompts
+                export PATH=$PATH:/root/google-cloud-sdk/bin
+                gcloud components install gke-gcloud-auth-plugin --quiet
+
+                echo "$GCP_SERVICE_ACCOUNT_KEY" > /tmp/key.json
+                gcloud auth activate-service-account --key-file=/tmp/key.json
+                gcloud config set project "$GCP_PROJECT_ID"
+                gcloud container clusters get-credentials "$GKE_CLUSTER" \
+                  --region "$GCP_REGION"
+
+                REGISTRY="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REPO}"
+                DEPLOY_DIR="repo-infra/deploy"
+
+                # Create namespace if needed
+                kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+
+                # Deploy each service via Helm
+                helm upgrade --install audit-api \
+                  "${DEPLOY_DIR}/helm/audit-assistant-api" \
+                  --namespace "$NAMESPACE" \
+                  --values "${DEPLOY_DIR}/helm/audit-assistant-api/values.yaml" \
+                  --values "${DEPLOY_DIR}/gcp/k8s/values-prod-gcp.yaml" \
+                  --set image.repository="${REGISTRY}/audit-assistant-api" \
+                  --set image.tag=latest \
+                  --wait --timeout 300s
+
+                helm upgrade --install audit-rag-engine \
+                  "${DEPLOY_DIR}/helm/audit-rag-engine" \
+                  --namespace "$NAMESPACE" \
+                  --values "${DEPLOY_DIR}/helm/audit-rag-engine/values.yaml" \
+                  --values "${DEPLOY_DIR}/gcp/k8s/values-prod-gcp.yaml" \
+                  --set image.repository="${REGISTRY}/audit-rag-engine" \
+                  --set image.tag=latest \
+                  --wait --timeout 300s
+
+                helm upgrade --install audit-ui \
+                  "${DEPLOY_DIR}/helm/audit-assistant-ui" \
+                  --namespace "$NAMESPACE" \
+                  --values "${DEPLOY_DIR}/helm/audit-assistant-ui/values.yaml" \
+                  --values "${DEPLOY_DIR}/gcp/k8s/values-prod-gcp.yaml" \
+                  --set image.repository="${REGISTRY}/audit-assistant-ui" \
+                  --set image.tag=latest \
+                  --wait --timeout 300s
+
+                helm upgrade --install audit-worker \
+                  "${DEPLOY_DIR}/helm/ingestion-worker" \
+                  --namespace "$NAMESPACE" \
+                  --values "${DEPLOY_DIR}/helm/ingestion-worker/values.yaml" \
+                  --values "${DEPLOY_DIR}/gcp/k8s/values-prod-gcp.yaml" \
+                  --set image.repository="${REGISTRY}/ingestion-worker" \
+                  --set image.tag=latest \
+                  --wait --timeout 300s
+
+                rm /tmp/key.json
+                echo "=== Production deployment complete ==="
+
+# =============================================================================
+# Groups (Concourse UI organisation)
+# =============================================================================
+groups:
+  - name: test
+    jobs:
+      - test-api
+      - test-rag-engine
+      - test-ui
+  - name: build
+    jobs:
+      - build-images
+  - name: staging
+    jobs:
+      - deploy-staging
+      - smoke-test-staging
+  - name: production
+    jobs:
+      - approve-production
+      - deploy-production
+  - name: all
+    jobs:
+      - test-api
+      - test-rag-engine
+      - test-ui
+      - build-images
+      - deploy-staging
+      - smoke-test-staging
+      - approve-production
+      - deploy-production

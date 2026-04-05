@@ -1,0 +1,31 @@
+# =============================================================================
+# Concourse Pipeline Parameters — GCP Production
+# =============================================================================
+# Usage:
+#   fly -t main set-pipeline -p audit-gcp-prod \
+#     -c deploy/gcp/concourse/pipeline.yml \
+#     -l deploy/gcp/concourse/params-production.yml
+#
+# Secrets (set via Concourse credential manager / Vault):
+#   - git-private-key
+#   - gcp-service-account-key
+# =============================================================================
+
+# ---- Git repositories ----
+git-repo-api-uri: git@github.com:makbarsyahwana/audit-assistant-api.git
+git-repo-rag-engine-uri: git@github.com:makbarsyahwana/audit-rag-engine.git
+git-repo-ui-uri: git@github.com:makbarsyahwana/audit-assistant-ui.git
+git-repo-infra-uri: git@github.com:makbarsyahwana/ai-rag-audit-assistant.git
+
+# ---- GCP project ----
+gcp-project-id: your-gcp-project-id
+gcp-region: asia-southeast1
+artifact-repo: audit-containers
+
+# ---- GKE cluster (production) ----
+gke-cluster-name: audit-production
+
+# ---- Staging URLs (still needed for smoke tests before promote) ----
+staging-api-url: https://audit-api-staging-xxxxx-as.a.run.app
+staging-rag-url: https://audit-rag-staging-xxxxx-as.a.run.app
+staging-ui-url: https://audit-ui-staging-xxxxx-as.a.run.app

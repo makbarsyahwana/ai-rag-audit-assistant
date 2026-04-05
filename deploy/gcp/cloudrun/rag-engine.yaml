@@ -1,0 +1,79 @@
+# Cloud Run service definition — audit-rag-engine (staging)
+# Deploy: gcloud run services replace deploy/gcp/cloudrun/rag-engine.yaml --region=asia-southeast1
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: audit-rag-staging
+  labels:
+    app: audit-rag-engine
+    env: staging
+  annotations:
+    run.googleapis.com/ingress: all
+    run.googleapis.com/launch-stage: GA
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "5"
+        run.googleapis.com/cpu-throttling: "false"
+        run.googleapis.com/startup-cpu-boost: "true"
+    spec:
+      containerConcurrency: 20
+      timeoutSeconds: 300
+      serviceAccountName: audit-rag-sa@YOUR_PROJECT.iam.gserviceaccount.com
+      containers:
+        - image: REGION-docker.pkg.dev/PROJECT/audit-containers/audit-rag-engine:latest
+          ports:
+            - containerPort: 8001
+          resources:
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          env:
+            - name: LOG_LEVEL
+              value: INFO
+            - name: LOG_FORMAT
+              value: json
+            - name: NEO4J_URI
+              valueFrom:
+                secretKeyRef:
+                  key: latest
+                  name: audit-neo4j-uri-staging
+            - name: MONGODB_URI
+              valueFrom:
+                secretKeyRef:
+                  key: latest
+                  name: audit-mongo-uri-staging
+            - name: S3_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  key: latest
+                  name: audit-s3-endpoint-staging
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  key: latest
+                  name: audit-openai-key
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  key: latest
+                  name: audit-redis-url-staging
+            - name: RABBITMQ_URL
+              valueFrom:
+                secretKeyRef:
+                  key: latest
+                  name: audit-rabbitmq-url-staging
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            periodSeconds: 30

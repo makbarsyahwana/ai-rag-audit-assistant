@@ -1,0 +1,71 @@
+# Cloud Run service definition — audit-assistant-api (staging)
+# Deploy: gcloud run services replace deploy/gcp/cloudrun/api.yaml --region=asia-southeast1
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: audit-api-staging
+  labels:
+    app: audit-assistant-api
+    env: staging
+  annotations:
+    run.googleapis.com/ingress: all
+    run.googleapis.com/launch-stage: GA
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "5"
+        run.googleapis.com/cpu-throttling: "false"
+        run.googleapis.com/startup-cpu-boost: "true"
+    spec:
+      containerConcurrency: 80
+      timeoutSeconds: 120
+      serviceAccountName: audit-api-sa@YOUR_PROJECT.iam.gserviceaccount.com
+      containers:
+        - image: REGION-docker.pkg.dev/PROJECT/audit-containers/audit-assistant-api:latest
+          ports:
+            - containerPort: 8000
+          resources:
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          env:
+            - name: NODE_ENV
+              value: staging
+            - name: LOG_FORMAT
+              value: json
+            - name: RAG_ENGINE_URL
+              value: https://audit-rag-staging-xxxxx-as.a.run.app
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  key: latest
+                  name: audit-db-url-staging
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  key: latest
+                  name: audit-redis-url-staging
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  key: latest
+                  name: audit-jwt-secret-staging
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  key: latest
+                  name: audit-openai-key
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 30

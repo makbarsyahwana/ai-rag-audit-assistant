@@ -1,0 +1,56 @@
+# Cloud Run service definition — audit-assistant-ui (staging)
+# Deploy: gcloud run services replace deploy/gcp/cloudrun/ui.yaml --region=asia-southeast1
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: audit-ui-staging
+  labels:
+    app: audit-assistant-ui
+    env: staging
+  annotations:
+    run.googleapis.com/ingress: all
+    run.googleapis.com/launch-stage: GA
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "3"
+        run.googleapis.com/cpu-throttling: "true"
+        run.googleapis.com/startup-cpu-boost: "true"
+    spec:
+      containerConcurrency: 100
+      timeoutSeconds: 60
+      serviceAccountName: audit-ui-sa@YOUR_PROJECT.iam.gserviceaccount.com
+      containers:
+        - image: REGION-docker.pkg.dev/PROJECT/audit-containers/audit-assistant-ui:latest
+          ports:
+            - containerPort: 3000
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          env:
+            - name: NODE_ENV
+              value: staging
+            - name: NEXT_PUBLIC_API_URL
+              value: https://audit-api-staging-xxxxx-as.a.run.app
+            - name: NEXTAUTH_URL
+              value: https://audit-ui-staging-xxxxx-as.a.run.app
+            - name: NEXTAUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  key: latest
+                  name: audit-nextauth-secret-staging
+          startupProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 3
+            periodSeconds: 3
+            failureThreshold: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            periodSeconds: 30
