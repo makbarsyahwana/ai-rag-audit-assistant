@@ -1,0 +1,57 @@
+{
+  "family": "audit-worker-staging",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "2048",
+  "memory": "4096",
+  "executionRoleArn": "arn:aws:iam::{{ACCOUNT_ID}}:role/audit-ecs-execution-role",
+  "taskRoleArn": "arn:aws:iam::{{ACCOUNT_ID}}:role/audit-worker-task-role",
+  "containerDefinitions": [
+    {
+      "name": "ingestion-worker",
+      "image": "{{IMAGE}}",
+      "essential": true,
+      "environment": [
+        { "name": "LOG_LEVEL", "value": "INFO" },
+        { "name": "LOG_FORMAT", "value": "json" }
+      ],
+      "secrets": [
+        {
+          "name": "RABBITMQ_URL",
+          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:{{ACCOUNT_ID}}:secret:audit/staging/rabbitmq-url"
+        },
+        {
+          "name": "NEO4J_URI",
+          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:{{ACCOUNT_ID}}:secret:audit/staging/neo4j-uri"
+        },
+        {
+          "name": "MONGODB_URI",
+          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:{{ACCOUNT_ID}}:secret:audit/staging/mongodb-uri"
+        },
+        {
+          "name": "S3_ENDPOINT",
+          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:{{ACCOUNT_ID}}:secret:audit/staging/s3-endpoint"
+        },
+        {
+          "name": "OPENAI_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:{{ACCOUNT_ID}}:secret:audit/openai-api-key"
+        }
+      ],
+      "healthCheck": {
+        "command": ["CMD-SHELL", "python -c 'import sys; sys.exit(0)'"],
+        "interval": 60,
+        "timeout": 10,
+        "retries": 3,
+        "startPeriod": 30
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/audit-worker-staging",
+          "awslogs-region": "ap-southeast-1",
+          "awslogs-stream-prefix": "worker"
+        }
+      }
+    }
+  ]
+}

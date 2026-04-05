@@ -1,0 +1,503 @@
+# =============================================================================
+# Concourse CI/CD Pipeline — Amazon Web Services
+# =============================================================================
+# Pipeline: build → test → push to ECR → deploy staging (ECS Fargate)
+#           → smoke tests → manual gate → deploy production (EKS via Helm)
+#
+# Set pipeline:
+#   fly -t main set-pipeline -p audit-aws \
+#     -c deploy/aws/concourse/pipeline.yml \
+#     -l deploy/aws/concourse/params-staging.yml
+# =============================================================================
+
+resources:
+  # ---- Git repositories ----
+  - name: repo-api
+    type: git
+    icon: github
+    source:
+      uri: ((git-repo-api-uri))
+      branch: main
+      private_key: ((git-private-key))
+
+  - name: repo-rag-engine
+    type: git
+    icon: github
+    source:
+      uri: ((git-repo-rag-engine-uri))
+      branch: main
+      private_key: ((git-private-key))
+
+  - name: repo-ui
+    type: git
+    icon: github
+    source:
+      uri: ((git-repo-ui-uri))
+      branch: main
+      private_key: ((git-private-key))
+
+  - name: repo-infra
+    type: git
+    icon: github
+    source:
+      uri: ((git-repo-infra-uri))
+      branch: main
+      private_key: ((git-private-key))
+
+  # ---- Container images (ECR) ----
+  - name: image-api
+    type: registry-image
+    icon: docker
+    source:
+      repository: ((aws-account-id)).dkr.ecr.((aws-region)).amazonaws.com/audit-assistant-api
+      aws_access_key_id: ((aws-access-key-id))
+      aws_secret_access_key: ((aws-secret-access-key))
+      aws_region: ((aws-region))
+
+  - name: image-rag-engine
+    type: registry-image
+    icon: docker
+    source:
+      repository: ((aws-account-id)).dkr.ecr.((aws-region)).amazonaws.com/audit-rag-engine
+      aws_access_key_id: ((aws-access-key-id))
+      aws_secret_access_key: ((aws-secret-access-key))
+      aws_region: ((aws-region))
+
+  - name: image-ui
+    type: registry-image
+    icon: docker
+    source:
+      repository: ((aws-account-id)).dkr.ecr.((aws-region)).amazonaws.com/audit-assistant-ui
+      aws_access_key_id: ((aws-access-key-id))
+      aws_secret_access_key: ((aws-secret-access-key))
+      aws_region: ((aws-region))
+
+  - name: image-worker
+    type: registry-image
+    icon: docker
+    source:
+      repository: ((aws-account-id)).dkr.ecr.((aws-region)).amazonaws.com/ingestion-worker
+      aws_access_key_id: ((aws-access-key-id))
+      aws_secret_access_key: ((aws-secret-access-key))
+      aws_region: ((aws-region))
+
+# =============================================================================
+# Jobs
+# =============================================================================
+jobs:
+  # ---------- 1. Test: audit-assistant-api ----------
+  - name: test-api
+    plan:
+      - get: repo-api
+        trigger: true
+      - task: lint-and-test
+        config:
+          platform: linux
+          image_resource:
+            type: registry-image
+            source: { repository: node, tag: "20-alpine" }
+          inputs:
+            - name: repo-api
+          run:
+            path: sh
+            args:
+              - -exc
+              - |
+                cd repo-api
+                npm ci
+                npx prisma generate
+                npm run lint
+                npm run test
+
+  # ---------- 2. Test: audit-rag-engine ----------
+  - name: test-rag-engine
+    plan:
+      - get: repo-rag-engine
+        trigger: true
+      - task: lint-and-test
+        config:
+          platform: linux
+          image_resource:
+            type: registry-image
+            source: { repository: python, tag: "3.11-slim" }
+          inputs:
+            - name: repo-rag-engine
+          run:
+            path: sh
+            args:
+              - -exc
+              - |
+                cd repo-rag-engine
+                pip install -e ".[dev]"
+                ruff check src/ tests/
+                pytest tests/ -v
+
+  # ---------- 3. Test: audit-assistant-ui ----------
+  - name: test-ui
+    plan:
+      - get: repo-ui
+        trigger: true
+      - task: lint-and-build
+        config:
+          platform: linux
+          image_resource:
+            type: registry-image
+            source: { repository: node, tag: "20-alpine" }
+          inputs:
+            - name: repo-ui
+          run:
+            path: sh
+            args:
+              - -exc
+              - |
+                cd repo-ui
+                npm ci
+                npm run lint
+                npm run build
+
+  # ---------- 4. Build & push images ----------
+  - name: build-images
+    plan:
+      - in_parallel:
+          - get: repo-api
+            passed: [test-api]
+            trigger: true
+          - get: repo-rag-engine
+            passed: [test-rag-engine]
+            trigger: true
+          - get: repo-ui
+            passed: [test-ui]
+            trigger: true
+          - get: repo-infra
+
+      - in_parallel:
+          - task: build-api
+            privileged: true
+            config:
+              platform: linux
+              image_resource:
+                type: registry-image
+                source: { repository: concourse/oci-build-task }
+              inputs:
+                - name: repo-api
+                - name: repo-infra
+              outputs:
+                - name: image-api-output
+              params:
+                CONTEXT: repo-api
+                DOCKERFILE: repo-infra/deploy/dockerfiles/api.Dockerfile
+              run:
+                path: build
+            output_mapping:
+              image: image-api-output
+
+          - task: build-rag-engine
+            privileged: true
+            config:
+              platform: linux
+              image_resource:
+                type: registry-image
+                source: { repository: concourse/oci-build-task }
+              inputs:
+                - name: repo-rag-engine
+                - name: repo-infra
+              outputs:
+                - name: image-rag-engine-output
+              params:
+                CONTEXT: repo-rag-engine
+                DOCKERFILE: repo-infra/deploy/dockerfiles/rag-engine.Dockerfile
+              run:
+                path: build
+            output_mapping:
+              image: image-rag-engine-output
+
+          - task: build-ui
+            privileged: true
+            config:
+              platform: linux
+              image_resource:
+                type: registry-image
+                source: { repository: concourse/oci-build-task }
+              inputs:
+                - name: repo-ui
+                - name: repo-infra
+              outputs:
+                - name: image-ui-output
+              params:
+                CONTEXT: repo-ui
+                DOCKERFILE: repo-infra/deploy/dockerfiles/ui.Dockerfile
+              run:
+                path: build
+            output_mapping:
+              image: image-ui-output
+
+          - task: build-worker
+            privileged: true
+            config:
+              platform: linux
+              image_resource:
+                type: registry-image
+                source: { repository: concourse/oci-build-task }
+              inputs:
+                - name: repo-rag-engine
+                - name: repo-infra
+              outputs:
+                - name: image-worker-output
+              params:
+                CONTEXT: repo-rag-engine
+                DOCKERFILE: repo-infra/deploy/dockerfiles/worker.Dockerfile
+              run:
+                path: build
+            output_mapping:
+              image: image-worker-output
+
+      - in_parallel:
+          - put: image-api
+            params: { image: image-api-output/image.tar }
+          - put: image-rag-engine
+            params: { image: image-rag-engine-output/image.tar }
+          - put: image-ui
+            params: { image: image-ui-output/image.tar }
+          - put: image-worker
+            params: { image: image-worker-output/image.tar }
+
+  # ---------- 5. Deploy staging (ECS Fargate) ----------
+  - name: deploy-staging
+    plan:
+      - in_parallel:
+          - get: image-api
+            passed: [build-images]
+            trigger: true
+          - get: image-rag-engine
+            passed: [build-images]
+            trigger: true
+          - get: image-ui
+            passed: [build-images]
+            trigger: true
+          - get: image-worker
+            passed: [build-images]
+            trigger: true
+          - get: repo-infra
+
+      - task: deploy-to-ecs
+        config:
+          platform: linux
+          image_resource:
+            type: registry-image
+            source: { repository: amazon/aws-cli, tag: latest }
+          inputs:
+            - name: repo-infra
+          params:
+            AWS_ACCESS_KEY_ID: ((aws-access-key-id))
+            AWS_SECRET_ACCESS_KEY: ((aws-secret-access-key))
+            AWS_DEFAULT_REGION: ((aws-region))
+            AWS_ACCOUNT_ID: ((aws-account-id))
+            ECS_CLUSTER: ((ecs-cluster-staging))
+          run:
+            path: sh
+            args:
+              - -exc
+              - |
+                REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
+                DEPLOY_DIR="repo-infra/deploy/aws/ecs"
+
+                # Helper: register task definition and update service
+                deploy_service() {
+                  local SERVICE_NAME=$1
+                  local TASK_DEF_FILE=$2
+                  local IMAGE_NAME=$3
+
+                  # Replace image placeholder in task definition
+                  sed "s|{{IMAGE}}|${REGISTRY}/${IMAGE_NAME}:latest|g" \
+                    "${DEPLOY_DIR}/${TASK_DEF_FILE}" > /tmp/taskdef.json
+
+                  # Register new task definition
+                  TASK_ARN=$(aws ecs register-task-definition \
+                    --cli-input-json file:///tmp/taskdef.json \
+                    --query 'taskDefinition.taskDefinitionArn' \
+                    --output text)
+
+                  # Update service with new task definition
+                  aws ecs update-service \
+                    --cluster "$ECS_CLUSTER" \
+                    --service "$SERVICE_NAME" \
+                    --task-definition "$TASK_ARN" \
+                    --force-new-deployment
+
+                  echo "✓ Deployed ${SERVICE_NAME} → ${TASK_ARN}"
+                }
+
+                deploy_service "audit-api-staging" "task-def-api.json" "audit-assistant-api"
+                deploy_service "audit-rag-staging" "task-def-rag-engine.json" "audit-rag-engine"
+                deploy_service "audit-ui-staging" "task-def-ui.json" "audit-assistant-ui"
+                deploy_service "audit-worker-staging" "task-def-worker.json" "ingestion-worker"
+
+                # Wait for services to stabilise
+                for SVC in audit-api-staging audit-rag-staging audit-ui-staging; do
+                  aws ecs wait services-stable \
+                    --cluster "$ECS_CLUSTER" --services "$SVC"
+                  echo "✓ ${SVC} is stable"
+                done
+
+  # ---------- 6. Smoke tests against staging ----------
+  - name: smoke-test-staging
+    plan:
+      - get: repo-infra
+        passed: [deploy-staging]
+        trigger: true
+      - task: run-smoke-tests
+        config:
+          platform: linux
+          image_resource:
+            type: registry-image
+            source: { repository: curlimages/curl, tag: latest }
+          params:
+            API_URL: ((staging-api-url))
+            RAG_URL: ((staging-rag-url))
+            UI_URL: ((staging-ui-url))
+          run:
+            path: sh
+            args:
+              - -exc
+              - |
+                echo "=== Smoke testing staging ==="
+                curl -sf "${API_URL}/health" | grep -q '"status"'
+                echo "✓ API health OK"
+
+                curl -sf "${RAG_URL}/health" | grep -q '"status"'
+                echo "✓ RAG engine health OK"
+
+                curl -sf "${UI_URL}" -o /dev/null
+                echo "✓ UI reachable"
+
+                echo "=== All smoke tests passed ==="
+
+  # ---------- 7. Manual gate for production ----------
+  - name: approve-production
+    plan:
+      - get: repo-infra
+        passed: [smoke-test-staging]
+      - task: wait-for-approval
+        config:
+          platform: linux
+          image_resource:
+            type: registry-image
+            source: { repository: alpine, tag: "3.19" }
+          run:
+            path: echo
+            args: ["Production deployment approved."]
+
+  # ---------- 8. Deploy production (EKS via Helm) ----------
+  - name: deploy-production
+    plan:
+      - in_parallel:
+          - get: repo-infra
+            passed: [approve-production]
+            trigger: true
+
+      - task: helm-deploy-to-eks
+        config:
+          platform: linux
+          image_resource:
+            type: registry-image
+            source: { repository: alpine/helm, tag: "3.14.0" }
+          inputs:
+            - name: repo-infra
+          params:
+            AWS_ACCESS_KEY_ID: ((aws-access-key-id))
+            AWS_SECRET_ACCESS_KEY: ((aws-secret-access-key))
+            AWS_DEFAULT_REGION: ((aws-region))
+            AWS_ACCOUNT_ID: ((aws-account-id))
+            EKS_CLUSTER: ((eks-cluster-name))
+            NAMESPACE: audit-production
+          run:
+            path: sh
+            args:
+              - -exc
+              - |
+                # Install AWS CLI and kubectl
+                apk add --no-cache curl bash python3 py3-pip
+                pip3 install awscli --break-system-packages
+                curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+                chmod +x kubectl && mv kubectl /usr/local/bin/
+
+                # Configure kubectl for EKS
+                aws eks update-kubeconfig \
+                  --name "$EKS_CLUSTER" \
+                  --region "$AWS_DEFAULT_REGION"
+
+                REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
+                DEPLOY_DIR="repo-infra/deploy"
+
+                # Create namespace if needed
+                kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+
+                # Deploy each service via Helm
+                helm upgrade --install audit-api \
+                  "${DEPLOY_DIR}/helm/audit-assistant-api" \
+                  --namespace "$NAMESPACE" \
+                  --values "${DEPLOY_DIR}/helm/audit-assistant-api/values.yaml" \
+                  --values "${DEPLOY_DIR}/aws/k8s/values-prod-aws.yaml" \
+                  --set image.repository="${REGISTRY}/audit-assistant-api" \
+                  --set image.tag=latest \
+                  --wait --timeout 300s
+
+                helm upgrade --install audit-rag-engine \
+                  "${DEPLOY_DIR}/helm/audit-rag-engine" \
+                  --namespace "$NAMESPACE" \
+                  --values "${DEPLOY_DIR}/helm/audit-rag-engine/values.yaml" \
+                  --values "${DEPLOY_DIR}/aws/k8s/values-prod-aws.yaml" \
+                  --set image.repository="${REGISTRY}/audit-rag-engine" \
+                  --set image.tag=latest \
+                  --wait --timeout 300s
+
+                helm upgrade --install audit-ui \
+                  "${DEPLOY_DIR}/helm/audit-assistant-ui" \
+                  --namespace "$NAMESPACE" \
+                  --values "${DEPLOY_DIR}/helm/audit-assistant-ui/values.yaml" \
+                  --values "${DEPLOY_DIR}/aws/k8s/values-prod-aws.yaml" \
+                  --set image.repository="${REGISTRY}/audit-assistant-ui" \
+                  --set image.tag=latest \
+                  --wait --timeout 300s
+
+                helm upgrade --install audit-worker \
+                  "${DEPLOY_DIR}/helm/ingestion-worker" \
+                  --namespace "$NAMESPACE" \
+                  --values "${DEPLOY_DIR}/helm/ingestion-worker/values.yaml" \
+                  --values "${DEPLOY_DIR}/aws/k8s/values-prod-aws.yaml" \
+                  --set image.repository="${REGISTRY}/ingestion-worker" \
+                  --set image.tag=latest \
+                  --wait --timeout 300s
+
+                echo "=== Production deployment complete ==="
+
+# =============================================================================
+# Groups
+# =============================================================================
+groups:
+  - name: test
+    jobs:
+      - test-api
+      - test-rag-engine
+      - test-ui
+  - name: build
+    jobs:
+      - build-images
+  - name: staging
+    jobs:
+      - deploy-staging
+      - smoke-test-staging
+  - name: production
+    jobs:
+      - approve-production
+      - deploy-production
+  - name: all
+    jobs:
+      - test-api
+      - test-rag-engine
+      - test-ui
+      - build-images
+      - deploy-staging
+      - smoke-test-staging
+      - approve-production
+      - deploy-production

@@ -1,0 +1,34 @@
+# =============================================================================
+# Concourse Pipeline Parameters — AWS Staging
+# =============================================================================
+# Usage:
+#   fly -t main set-pipeline -p audit-aws-staging \
+#     -c deploy/aws/concourse/pipeline.yml \
+#     -l deploy/aws/concourse/params-staging.yml
+#
+# Secrets (set via Concourse credential manager / Vault):
+#   - git-private-key
+#   - aws-access-key-id
+#   - aws-secret-access-key
+# =============================================================================
+
+# ---- Git repositories ----
+git-repo-api-uri: git@github.com:makbarsyahwana/audit-assistant-api.git
+git-repo-rag-engine-uri: git@github.com:makbarsyahwana/audit-rag-engine.git
+git-repo-ui-uri: git@github.com:makbarsyahwana/audit-assistant-ui.git
+git-repo-infra-uri: git@github.com:makbarsyahwana/ai-rag-audit-assistant.git
+
+# ---- AWS account ----
+aws-account-id: "123456789012"
+aws-region: ap-southeast-1
+
+# ---- ECS cluster (staging) ----
+ecs-cluster-staging: audit-staging
+
+# ---- EKS cluster (production) ----
+eks-cluster-name: audit-production
+
+# ---- Staging URLs (ALB — set after first deploy) ----
+staging-api-url: https://api-staging.audit.example.com
+staging-rag-url: https://rag-staging.audit.example.com
+staging-ui-url: https://staging.audit.example.com

@@ -1,0 +1,101 @@
+{
+  "comment": "ECS Service Connect configuration for inter-service communication",
+  "namespace": "audit.local",
+  "services": [
+    {
+      "serviceName": "audit-api-staging",
+      "serviceConnectConfiguration": {
+        "enabled": true,
+        "namespace": "audit.local",
+        "services": [
+          {
+            "portName": "api",
+            "discoveryName": "audit-api-staging",
+            "clientAliases": [
+              {
+                "port": 8000,
+                "dnsName": "audit-api-staging.audit.local"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "serviceName": "audit-rag-staging",
+      "serviceConnectConfiguration": {
+        "enabled": true,
+        "namespace": "audit.local",
+        "services": [
+          {
+            "portName": "rag",
+            "discoveryName": "audit-rag-staging",
+            "clientAliases": [
+              {
+                "port": 8001,
+                "dnsName": "audit-rag-staging.audit.local"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "serviceName": "audit-ui-staging",
+      "serviceConnectConfiguration": {
+        "enabled": true,
+        "namespace": "audit.local",
+        "services": [
+          {
+            "portName": "ui",
+            "discoveryName": "audit-ui-staging",
+            "clientAliases": [
+              {
+                "port": 3000,
+                "dnsName": "audit-ui-staging.audit.local"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "autoScaling": {
+    "audit-api-staging": {
+      "minCapacity": 1,
+      "maxCapacity": 5,
+      "targetTrackingPolicies": [
+        {
+          "metricType": "ECSServiceAverageCPUUtilization",
+          "targetValue": 70.0,
+          "scaleInCooldown": 60,
+          "scaleOutCooldown": 30
+        }
+      ]
+    },
+    "audit-rag-staging": {
+      "minCapacity": 1,
+      "maxCapacity": 5,
+      "targetTrackingPolicies": [
+        {
+          "metricType": "ECSServiceAverageCPUUtilization",
+          "targetValue": 60.0,
+          "scaleInCooldown": 60,
+          "scaleOutCooldown": 30
+        }
+      ]
+    },
+    "audit-ui-staging": {
+      "minCapacity": 1,
+      "maxCapacity": 3,
+      "targetTrackingPolicies": [
+        {
+          "metricType": "ECSServiceAverageCPUUtilization",
+          "targetValue": 70.0,
+          "scaleInCooldown": 60,
+          "scaleOutCooldown": 30
+        }
+      ]
+    }
+  }
+}

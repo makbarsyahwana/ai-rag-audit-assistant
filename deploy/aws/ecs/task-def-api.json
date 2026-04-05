@@ -1,0 +1,61 @@
+{
+  "family": "audit-api-staging",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048",
+  "executionRoleArn": "arn:aws:iam::{{ACCOUNT_ID}}:role/audit-ecs-execution-role",
+  "taskRoleArn": "arn:aws:iam::{{ACCOUNT_ID}}:role/audit-api-task-role",
+  "containerDefinitions": [
+    {
+      "name": "audit-assistant-api",
+      "image": "{{IMAGE}}",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        { "name": "NODE_ENV", "value": "staging" },
+        { "name": "LOG_FORMAT", "value": "json" },
+        { "name": "PORT", "value": "8000" },
+        { "name": "RAG_ENGINE_URL", "value": "http://audit-rag-staging.audit.local:8001" }
+      ],
+      "secrets": [
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:{{ACCOUNT_ID}}:secret:audit/staging/database-url"
+        },
+        {
+          "name": "REDIS_URL",
+          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:{{ACCOUNT_ID}}:secret:audit/staging/redis-url"
+        },
+        {
+          "name": "JWT_SECRET",
+          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:{{ACCOUNT_ID}}:secret:audit/staging/jwt-secret"
+        },
+        {
+          "name": "OPENAI_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:{{ACCOUNT_ID}}:secret:audit/openai-api-key"
+        }
+      ],
+      "healthCheck": {
+        "command": ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8000/health || exit 1"],
+        "interval": 30,
+        "timeout": 10,
+        "retries": 3,
+        "startPeriod": 30
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/audit-api-staging",
+          "awslogs-region": "ap-southeast-1",
+          "awslogs-stream-prefix": "api"
+        }
+      }
+    }
+  ]
+}

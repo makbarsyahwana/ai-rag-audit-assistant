@@ -1,0 +1,47 @@
+{
+  "family": "audit-ui-staging",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::{{ACCOUNT_ID}}:role/audit-ecs-execution-role",
+  "taskRoleArn": "arn:aws:iam::{{ACCOUNT_ID}}:role/audit-ui-task-role",
+  "containerDefinitions": [
+    {
+      "name": "audit-assistant-ui",
+      "image": "{{IMAGE}}",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 3000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        { "name": "NODE_ENV", "value": "staging" },
+        { "name": "NEXT_PUBLIC_API_URL", "value": "https://api-staging.audit.example.com" }
+      ],
+      "secrets": [
+        {
+          "name": "NEXTAUTH_SECRET",
+          "valueFrom": "arn:aws:secretsmanager:ap-southeast-1:{{ACCOUNT_ID}}:secret:audit/staging/nextauth-secret"
+        }
+      ],
+      "healthCheck": {
+        "command": ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000 || exit 1"],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 15
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/audit-ui-staging",
+          "awslogs-region": "ap-southeast-1",
+          "awslogs-stream-prefix": "ui"
+        }
+      }
+    }
+  ]
+}
